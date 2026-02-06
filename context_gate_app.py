@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import os
 import re
@@ -28,6 +28,7 @@ st.caption("Context-first • Pair-specific • Bukan sinyal entry")
 EXPECTED_COLUMNS = [
     "datetime_wib",
     "pair",
+    "inst_id",
     "session",
     "rv_label",
     "rvol_label",
@@ -77,22 +78,19 @@ LABEL_ID = {
 }
 
 # ==================================================
-# PAIR INPUT
+# PAIR INPUT (DISERDERHANAKAN)
 # ==================================================
-pair_raw = st.text_input(
-    "Pair Futures (contoh: BTCUSDT, SOLUSDT)",
-    value="BTCUSDT"
+base_asset = st.text_input(
+    "Pair Futures (cukup simbol dasar, contoh: BTC, ETH, SOL)",
+    value="BTC"
 ).upper().strip()
 
-if not re.match(r"^[A-Z0-9]+USDT$", pair_raw):
+if not re.match(r"^[A-Z]{2,10}$", base_asset):
     st.error("Format pair tidak valid.")
     st.stop()
 
-inst_id = pair_raw.replace("USDT", "") + "-USDT-SWAP"
-st.caption(f"Instrumen OKX: `{inst_id}`")
-
 # ==================================================
-# OKX API CALLS
+# OKX API FUNCTIONS
 # ==================================================
 @st.cache_data(ttl=60)
 def get_candles(inst, limit=96):
@@ -122,15 +120,31 @@ def get_oi_history(inst, limit=6):
     return r["data"] if r.get("code") == "0" else []
 
 # ==================================================
-# LOAD MARKET DATA
+# INSTRUMENT FALLBACK LOGIC
 # ==================================================
-candles = get_candles(inst_id)
-ticker = get_ticker(inst_id)
-oi_hist = get_oi_history(inst_id)
+inst_candidates = [
+    f"{base_asset}-USDT-SWAP",
+    f"{base_asset}-USD-SWAP"
+]
 
-if not candles or ticker is None or not oi_hist:
-    st.error("❌ Data market tidak tersedia atau tidak lengkap.")
+candles = ticker = oi_hist = None
+inst_used = None
+
+for inst in inst_candidates:
+    c = get_candles(inst)
+    t = get_ticker(inst)
+    oi = get_oi_history(inst)
+
+    if c and t and oi:
+        candles, ticker, oi_hist = c, t, oi
+        inst_used = inst
+        break
+
+if candles is None:
+    st.error("❌ Data market tidak tersedia atau OI tidak lengkap untuk pair ini.")
     st.stop()
+
+st.caption(f"Instrumen OKX yang digunakan: `{inst_used}`")
 
 # ==================================================
 # BUILD CANDLE DF
@@ -171,7 +185,7 @@ else:
     rv_label = "NORMAL"
 
 # ==================================================
-# OPEN INTEREST MOMENTUM (REAL)
+# OPEN INTEREST MOMENTUM
 # ==================================================
 oi_df = pd.DataFrame(oi_hist)
 oi_df["oi"] = oi_df["oi"].astype(float)
@@ -202,7 +216,7 @@ else:
     session = "Off-hours"
 
 # ==================================================
-# MARKET BEHAVIOR LOGIC
+# MARKET BEHAVIOR
 # ==================================================
 if rv_label == "ABOVE_USUAL" and rvol_label == "COMPRESSED" and oi_label == "OI_BUILDING":
     behavior = "ACCUMULATION_LIKE"
@@ -230,7 +244,8 @@ else:
 # ==================================================
 st.subheader("📊 Kondisi Pasar Saat Ini")
 st.markdown(f"""
-**Pair** : {pair_raw}  
+**Pair** : {base_asset}  
+**Instrumen** : {inst_used}  
 **Session** : {session}  
 **WIB** : {now_wib.strftime('%H:%M')}
 
@@ -258,7 +273,8 @@ if st.button("💾 Simpan ke Jurnal"):
     dfj = pd.read_csv(JOURNAL_FILE)
     dfj.loc[len(dfj)] = [
         now_wib.strftime("%Y-%m-%d %H:%M"),
-        pair_raw,
+        base_asset,
+        inst_used,
         session,
         rv_label,
         rvol_label,
@@ -284,14 +300,14 @@ with open(JOURNAL_FILE, "rb") as f:
     )
 
 # ==================================================
-# GLOSSARY (LENGKAP & JELAS)
+# GLOSSARY
 # ==================================================
 with st.expander("📘 Daftar Istilah Context Gate", expanded=False):
     st.markdown("""
 ### Kondisi Pasar Saat Ini
 
 **Volume di atas kebiasaan**  
-Aktivitas transaksi lebih ramai dibanding kondisi normal pair tersebut.
+Aktivitas transaksi lebih ramai dari kondisi normal pair tersebut.
 
 **Volume normal**  
 Aktivitas pasar berada pada tingkat wajar.
@@ -300,10 +316,10 @@ Aktivitas pasar berada pada tingkat wajar.
 Minat pasar rendah, rawan noise dan false move.
 
 **Range melebar**  
-Pergerakan harga lebih luas dari biasanya, volatilitas meningkat.
+Harga bergerak lebih luas dari biasanya, volatilitas meningkat.
 
 **Range menyempit**  
-Harga bergerak dalam rentang sempit, sering menandakan fase konsolidasi.
+Harga bergerak sempit, sering menandakan fase konsolidasi.
 
 **Range normal**  
 Pergerakan harga stabil dan proporsional.
@@ -312,7 +328,7 @@ Pergerakan harga stabil dan proporsional.
 Open Interest meningkat → partisipan menambah posisi.
 
 **Posisi futures sedang ditutup**  
-Open Interest menurun → posisi lama mulai dilepas.
+Open Interest menurun → posisi lama dilepas.
 
 **Minat futures stagnan**  
 Tidak ada perubahan signifikan pada Open Interest.
@@ -322,16 +338,16 @@ Tidak ada perubahan signifikan pada Open Interest.
 ### Interpretasi Perilaku Pasar
 
 **Indikasi akumulasi**  
-Volume tinggi + range menyempit + OI naik → posisi kemungkinan sedang dibangun, bukan entry agresif.
+Volume tinggi + range menyempit + OI naik → posisi dibangun, belum dilepas.
 
 **Partisipasi sehat**  
-Volume dan volatilitas meningkat bersamaan → pasar aktif dan responsif.
+Volume dan volatilitas naik seimbang → pasar aktif dan responsif.
 
 **Indikasi distribusi / exit**  
-OI menurun → posisi futures ditutup, rawan whipsaw.
+OI turun → rawan whipsaw dan fake move.
 
 **Partisipasi rendah**  
-Minat pasar kecil → peluang edge rendah.
+Minat pasar kecil → edge rendah.
 
 **Perilaku campuran**  
 Tidak ada konteks dominan, tunggu kejelasan.
