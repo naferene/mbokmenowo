@@ -38,6 +38,13 @@ if os.path.exists(JOURNAL_FILE) and not st.session_state.journal:
     st.session_state.journal = pd.read_csv(JOURNAL_FILE).to_dict("records")
 
 # ==================================================
+# MIGRATION — BACKWARD COMPATIBILITY
+# ==================================================
+for trade in st.session_state.journal:
+    if "time_state" not in trade:
+        trade["time_state"] = "DONE"
+
+# ==================================================
 # SAVE & BACKUP
 # ==================================================
 def save_journal():
@@ -56,6 +63,7 @@ def backup_journal():
 def get_latest_context(pair, trade_time, max_minutes=30):
     if not os.path.exists(CONTEXT_JOURNAL_FILE):
         return None
+
     df = pd.read_csv(CONTEXT_JOURNAL_FILE)
     if df.empty:
         return None
@@ -96,6 +104,7 @@ st.divider()
 # ==================================================
 if mode == "📱 Quick Trade (Eksekusi)":
 
+    # refresh tiap 1 menit agar countdown hidup
     st_autorefresh(interval=60 * 1000, key="timer")
 
     pin = st.text_input("🔐 PIN Quick Trade", type="password")
@@ -110,13 +119,13 @@ if mode == "📱 Quick Trade (Eksekusi)":
     leverage = st.number_input("Leverage (x)", min_value=1, value=5)
 
     # ==================================================
-    # BIAS CHECKLIST (WITH EXPANDERS)
+    # BIAS CHECKLIST (WITH COLLAPSED EXPANDERS)
     # ==================================================
     st.markdown("### 🧠 Bias Checklist")
 
     c1 = st.checkbox("EMA searah")
     with st.expander("Penjelasan EMA searah", expanded=False):
-        st.markdown("- EMA 21/55/89/144 rapi, tidak kusut")
+        st.markdown("- EMA 21/55/89/144 rapi dan searah")
 
     c2 = st.checkbox("Harga dijaga EMA")
     with st.expander("Penjelasan harga vs EMA", expanded=False):
@@ -124,11 +133,11 @@ if mode == "📱 Quick Trade (Eksekusi)":
 
     c3 = st.checkbox("Momentum ada")
     with st.expander("Penjelasan momentum", expanded=False):
-        st.markdown("- RSI tidak flat / tenaga masih ada")
+        st.markdown("- RSI tidak flat, tenaga masih ada")
 
     c4 = st.checkbox("Market tidak choppy")
     with st.expander("Penjelasan choppy", expanded=False):
-        st.markdown("- Tidak doji beruntun / whipsaw")
+        st.markdown("- Tidak whipsaw / doji beruntun")
 
     bias_score = sum([c1, c2, c3, c4])
     if bias_score < 3:
@@ -177,7 +186,7 @@ if mode == "📱 Quick Trade (Eksekusi)":
         st.success("Trade dicatat.")
 
     # ==================================================
-    # ACTIVE / MATURE TRADES PANEL
+    # ACTIVE & MATURE TRADES PANEL
     # ==================================================
     st.divider()
     st.subheader("🟢 Trade Aktif")
@@ -189,12 +198,15 @@ if mode == "📱 Quick Trade (Eksekusi)":
 
     active_count = sum(1 for _, t in open_trades if t["time_state"] == "ACTIVE")
     if active_count > 5:
-        st.warning("⚠️ Lebih dari 5 trade ACTIVE. Perhatikan fokus.")
+        st.warning("⚠️ Lebih dari 5 trade ACTIVE. Fokus bisa menurun.")
 
     for idx, trade in open_trades:
-        elapsed = int((datetime.now() - datetime.fromisoformat(trade["timestamp"])).total_seconds() / 60)
+        elapsed = int(
+            (datetime.now() - datetime.fromisoformat(trade["timestamp"]))
+            .total_seconds() / 60
+        )
 
-        # Auto transition ACTIVE → MATURE
+        # AUTO TRANSITION ACTIVE → MATURE
         if trade["time_state"] == "ACTIVE" and elapsed >= trade["time_eval_min"]:
             trade["time_state"] = "MATURE"
             save_journal()
@@ -218,7 +230,7 @@ if mode == "📱 Quick Trade (Eksekusi)":
                 st.success("Trade ditandai selesai.")
 
     # ==================================================
-    # UPDATE RESULT R (QUICK)
+    # UPDATE RESULT R (QUICK MODE)
     # ==================================================
     st.divider()
     st.subheader("✏️ Update Hasil Trade (Quick)")
