@@ -14,16 +14,19 @@ BASE_URL = "https://www.okx.com"
 JOURNAL_FILE = "context_gate_journal.csv"
 
 st.set_page_config(
-    page_title="Context Gate OKX Futures V2",
+    page_title="Context Gate — OKX Futures",
     page_icon="🧭",
     layout="centered"
 )
 
+# ==================================================
+# HEADER
+# ==================================================
 st.title("🧭 Context Gate — OKX Futures")
 st.caption("Context-first • Pair-specific • Bukan sinyal")
 
 # ==================================================
-# LABEL TERJEMAHAN (UI)
+# LABEL TERJEMAHAN (UI ONLY)
 # ==================================================
 LABEL_ID = {
     "ABOVE_USUAL": "Volume di atas kebiasaan",
@@ -74,7 +77,28 @@ if not re.match(r"^[A-Z0-9]+USDT$", pair_raw):
     st.stop()
 
 inst_id = pair_raw.replace("USDT", "") + "-USDT-SWAP"
-st.caption(f"Instrumen OKX: `{inst_id}`")
+
+# ==================================================
+# TIME CONTEXT
+# ==================================================
+wib = pytz.timezone("Asia/Jakarta")
+now_wib = datetime.now(wib)
+hour = now_wib.hour
+
+if 7 <= hour < 14:
+    session = "Asia"
+elif 14 <= hour < 19:
+    session = "London"
+elif 19 <= hour < 23:
+    session = "New York"
+else:
+    session = "Off-hours"
+
+st.caption(
+    f"Pair: **{pair_raw}** | Session: **{session}** | WIB: **{now_wib.strftime('%H:%M')}**"
+)
+
+st.divider()
 
 # ==================================================
 # OKX API FUNCTIONS
@@ -135,7 +159,7 @@ df[["h","l","c","volQuote"]] = df[["h","l","c","volQuote"]].astype(float)
 df["range"] = df["h"] - df["l"]
 
 # ==================================================
-# RELATIVE VOLATILITY (REFINED)
+# RELATIVE VOLATILITY (UNCHANGED)
 # ==================================================
 median_range = np.median(df["range"])
 avg_range = df["range"].mean()
@@ -149,7 +173,7 @@ else:
     rvol_label = "NORMAL"
 
 # ==================================================
-# RELATIVE VOLUME (REFINED)
+# RELATIVE VOLUME (UNCHANGED)
 # ==================================================
 vol_now = float(ticker["volCcy24h"])
 median_vol = np.median(df["volQuote"]) * len(df)
@@ -163,7 +187,7 @@ else:
     rv_label = "NORMAL"
 
 # ==================================================
-# OI MOMENTUM (DEFENSIVE)
+# OI MOMENTUM (UNCHANGED, DEFENSIVE)
 # ==================================================
 if oi_hist:
     oi_df = pd.DataFrame(oi_hist)
@@ -180,23 +204,7 @@ else:
     oi_label = "OI_INERT"
 
 # ==================================================
-# TIME CONTEXT
-# ==================================================
-wib = pytz.timezone("Asia/Jakarta")
-now_wib = datetime.now(wib)
-hour = now_wib.hour
-
-if 7 <= hour < 14:
-    session = "Asia"
-elif 14 <= hour < 19:
-    session = "London"
-elif 19 <= hour < 23:
-    session = "New York"
-else:
-    session = "Off-hours"
-
-# ==================================================
-# MARKET BEHAVIOR + SANITY CHECK
+# MARKET BEHAVIOR (UNCHANGED)
 # ==================================================
 if rv_label == "ABOVE_USUAL" and rvol_label == "COMPRESSED" and oi_label == "OI_BUILDING":
     behavior = "ACCUMULATION_LIKE"
@@ -209,12 +217,11 @@ elif rv_label == "BELOW_USUAL":
 else:
     behavior = "MIXED"
 
-# Sanity check: akumulasi tapi range terlalu kecil & OI inert
 if behavior == "ACCUMULATION_LIKE" and oi_label == "OI_INERT":
     behavior = "MIXED"
 
 # ==================================================
-# VERDICT
+# VERDICT (UNCHANGED)
 # ==================================================
 if behavior in ["LOW_ENGAGEMENT", "EXIT_LIKE"]:
     verdict = "⛔ Tidak Layak Ditrade"
@@ -224,27 +231,36 @@ else:
     verdict = "✅ Layak Dipantau"
 
 # ==================================================
-# DISPLAY
+# ================== UX-POLISHED DISPLAY ==================
 # ==================================================
-st.subheader("📊 Snapshot Konteks")
 
+# ---------- SNAPSHOT DATA ----------
+st.markdown("### 📊 Kondisi Pasar Saat Ini")
 st.markdown(f"""
-**Pair**: {pair_raw}  
-**Session**: {session}  
-**Waktu (WIB)**: {now_wib.strftime('%H:%M')}
-
-**Volume**: {LABEL_ID[rv_label]}  
-**Volatilitas**: {LABEL_ID[rvol_label]}  
-**Open Interest**: {LABEL_ID[oi_label]}  
-**Perilaku Pasar**: {LABEL_ID[behavior]}
+• **Volume**        : {LABEL_ID[rv_label]}  
+• **Volatilitas**   : {LABEL_ID[rvol_label]}  
+• **Open Interest** : {LABEL_ID[oi_label]}
 """)
 
+st.divider()
+
+# ---------- INTERPRETATION ----------
+st.markdown("### 🧠 Interpretasi Perilaku Pasar")
+st.markdown(f"**{LABEL_ID[behavior]}**")
+
+st.divider()
+
+# ---------- VERDICT ----------
+st.markdown("### 🎯 Sikap yang Disarankan")
 st.markdown(f"## {verdict}")
+
+st.divider()
 
 # ==================================================
 # JOURNAL INPUT
 # ==================================================
-st.divider()
+st.markdown("### 📝 Jurnal Keputusan")
+
 decision = st.radio("Keputusan", ["SKIPPED", "TAKEN"], horizontal=True)
 note = st.text_input("Catatan (opsional)")
 
@@ -278,22 +294,22 @@ with open(JOURNAL_FILE, "rb") as f:
     )
 
 # ==================================================
-# GLOSSARY
+# GLOSSARY (COLLAPSED)
 # ==================================================
 with st.expander("📘 Daftar Istilah Context Gate", expanded=False):
     st.markdown("""
 **Indikasi akumulasi**  
-Volume relatif tinggi, range menyempit, dan Open Interest bertambah → posisi kemungkinan sedang dibangun.
+Volume relatif meningkat, range menyempit, dan Open Interest bertambah.
 
 **Partisipasi sehat**  
-Volume dan volatilitas berkembang seimbang, pasar aktif dan responsif.
+Volume dan volatilitas berkembang seimbang, pasar aktif.
 
 **Partisipasi rendah**  
 Minat pasar kecil, pergerakan didominasi noise.
 
-**Indikasi distribusi / exit**  
-Open Interest menurun → posisi futures mulai ditutup.
+**Distribusi / exit**  
+Open Interest menurun, posisi mulai ditutup.
 
 **Amati saja**  
-Konteks menarik, tetapi belum ada alasan kuat untuk masuk.
+Konteks menarik, belum saatnya masuk.
 """)
