@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import pytz
 import os
 import re
@@ -77,7 +77,7 @@ inst_id = pair_raw.replace("USDT", "") + "-USDT-SWAP"
 st.caption(f"Instrumen OKX: `{inst_id}`")
 
 # ==================================================
-# OKX API
+# OKX API FUNCTIONS
 # ==================================================
 @st.cache_data(ttl=60)
 def get_candles(inst, limit=96):
@@ -102,13 +102,16 @@ def get_oi_history(inst, limit=6):
     r = requests.get(
         f"{BASE_URL}/api/v5/public/open-interest-history",
         params={
+            "instType": "SWAP",
             "instId": inst,
             "period": "15m",
             "limit": limit
         },
         timeout=10
     ).json()
-    return r["data"] if r.get("code") == "0" else []
+    if r.get("code") != "0":
+        return []
+    return r.get("data", [])
 
 # ==================================================
 # LOAD DATA
@@ -117,12 +120,12 @@ candles = get_candles(inst_id)
 ticker = get_ticker(inst_id)
 oi_hist = get_oi_history(inst_id)
 
-if not candles or ticker is None or not oi_hist:
-    st.error("Data market tidak tersedia untuk pair ini.")
+if not candles or ticker is None:
+    st.error("Data harga tidak tersedia untuk pair ini.")
     st.stop()
 
 # ==================================================
-# BUILD DF CANDLE
+# BUILD CANDLE DF
 # ==================================================
 df = pd.DataFrame(
     candles,
@@ -132,50 +135,52 @@ df[["h","l","c","volQuote"]] = df[["h","l","c","volQuote"]].astype(float)
 df["range"] = df["h"] - df["l"]
 
 # ==================================================
-# RELATIVE VOLATILITY
+# RELATIVE VOLATILITY (REFINED)
 # ==================================================
 median_range = np.median(df["range"])
 avg_range = df["range"].mean()
 rvol = avg_range / median_range if median_range else 1
 
-if rvol > 1.2:
+if rvol > 1.15:
     rvol_label = "EXPANDING"
-elif rvol < 0.8:
+elif rvol < 0.85:
     rvol_label = "COMPRESSED"
 else:
     rvol_label = "NORMAL"
 
 # ==================================================
-# RELATIVE VOLUME
+# RELATIVE VOLUME (REFINED)
 # ==================================================
 vol_now = float(ticker["volCcy24h"])
 median_vol = np.median(df["volQuote"]) * len(df)
 rv = vol_now / median_vol if median_vol else 1
 
-if rv > 1.3:
+if rv > 1.25:
     rv_label = "ABOVE_USUAL"
-elif rv < 0.8:
+elif rv < 0.75:
     rv_label = "BELOW_USUAL"
 else:
     rv_label = "NORMAL"
 
 # ==================================================
-# OI MOMENTUM (REAL)
+# OI MOMENTUM (DEFENSIVE)
 # ==================================================
-oi_df = pd.DataFrame(oi_hist)
-oi_df["oi"] = oi_df["oi"].astype(float)
+if oi_hist:
+    oi_df = pd.DataFrame(oi_hist)
+    oi_df["oi"] = oi_df["oi"].astype(float)
+    oi_delta = oi_df["oi"].iloc[0] - oi_df["oi"].iloc[-1]
 
-oi_delta = oi_df["oi"].iloc[0] - oi_df["oi"].iloc[-1]
-
-if oi_delta > 0:
-    oi_label = "OI_BUILDING"
-elif oi_delta < 0:
-    oi_label = "OI_UNWINDING"
+    if oi_delta > 0:
+        oi_label = "OI_BUILDING"
+    elif oi_delta < 0:
+        oi_label = "OI_UNWINDING"
+    else:
+        oi_label = "OI_INERT"
 else:
     oi_label = "OI_INERT"
 
 # ==================================================
-# TIME CONTEXT (SESSION)
+# TIME CONTEXT
 # ==================================================
 wib = pytz.timezone("Asia/Jakarta")
 now_wib = datetime.now(wib)
@@ -191,7 +196,7 @@ else:
     session = "Off-hours"
 
 # ==================================================
-# MARKET BEHAVIOR
+# MARKET BEHAVIOR + SANITY CHECK
 # ==================================================
 if rv_label == "ABOVE_USUAL" and rvol_label == "COMPRESSED" and oi_label == "OI_BUILDING":
     behavior = "ACCUMULATION_LIKE"
@@ -202,6 +207,10 @@ elif oi_label == "OI_UNWINDING":
 elif rv_label == "BELOW_USUAL":
     behavior = "LOW_ENGAGEMENT"
 else:
+    behavior = "MIXED"
+
+# Sanity check: akumulasi tapi range terlalu kecil & OI inert
+if behavior == "ACCUMULATION_LIKE" and oi_label == "OI_INERT":
     behavior = "MIXED"
 
 # ==================================================
@@ -274,7 +283,7 @@ with open(JOURNAL_FILE, "rb") as f:
 with st.expander("📘 Daftar Istilah Context Gate", expanded=False):
     st.markdown("""
 **Indikasi akumulasi**  
-Volume meningkat, range menyempit, dan Open Interest naik → posisi kemungkinan sedang dibangun.
+Volume relatif tinggi, range menyempit, dan Open Interest bertambah → posisi kemungkinan sedang dibangun.
 
 **Partisipasi sehat**  
 Volume dan volatilitas berkembang seimbang, pasar aktif dan responsif.
@@ -286,5 +295,5 @@ Minat pasar kecil, pergerakan didominasi noise.
 Open Interest menurun → posisi futures mulai ditutup.
 
 **Amati saja**  
-Konteks menarik tapi belum saatnya masuk. Tunggu struktur & momentum.
+Konteks menarik, tetapi belum ada alasan kuat untuk masuk.
 """)
