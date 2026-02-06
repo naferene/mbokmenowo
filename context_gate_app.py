@@ -78,7 +78,7 @@ LABEL_ID = {
 }
 
 # ==================================================
-# PAIR INPUT (DISERDERHANAKAN)
+# PAIR INPUT (SIMPEL & CEPAT)
 # ==================================================
 base_asset = st.text_input(
     "Pair Futures (cukup simbol dasar, contoh: BTC, ETH, SOL)",
@@ -120,34 +120,42 @@ def get_oi_history(inst, limit=6):
     return r["data"] if r.get("code") == "0" else []
 
 # ==================================================
-# INSTRUMENT FALLBACK LOGIC
+# INSTRUMENT FALLBACK (ROBUST)
 # ==================================================
 inst_candidates = [
     f"{base_asset}-USDT-SWAP",
     f"{base_asset}-USD-SWAP"
 ]
 
-candles = ticker = oi_hist = None
+candles = None
+ticker = None
+oi_hist = []
 inst_used = None
 
 for inst in inst_candidates:
     c = get_candles(inst)
     t = get_ticker(inst)
+
+    if not c or not t:
+        continue  # instrumen tidak valid / tidak ada data harga
+
+    # OI boleh kosong (bukan error)
     oi = get_oi_history(inst)
 
-    if c and t and oi:
-        candles, ticker, oi_hist = c, t, oi
-        inst_used = inst
-        break
+    candles = c
+    ticker = t
+    oi_hist = oi if oi else []
+    inst_used = inst
+    break
 
 if candles is None:
-    st.error("❌ Data market tidak tersedia atau OI tidak lengkap untuk pair ini.")
+    st.error("❌ Data market tidak tersedia untuk pair ini.")
     st.stop()
 
 st.caption(f"Instrumen OKX yang digunakan: `{inst_used}`")
 
 # ==================================================
-# BUILD CANDLE DF
+# BUILD CANDLE DATAFRAME
 # ==================================================
 df = pd.DataFrame(
     candles,
@@ -185,17 +193,19 @@ else:
     rv_label = "NORMAL"
 
 # ==================================================
-# OPEN INTEREST MOMENTUM
+# OPEN INTEREST MOMENTUM (SAFE)
 # ==================================================
-oi_df = pd.DataFrame(oi_hist)
-oi_df["oi"] = oi_df["oi"].astype(float)
+if oi_hist:
+    oi_df = pd.DataFrame(oi_hist)
+    oi_df["oi"] = oi_df["oi"].astype(float)
+    oi_delta = oi_df["oi"].iloc[0] - oi_df["oi"].iloc[-1]
 
-oi_delta = oi_df["oi"].iloc[0] - oi_df["oi"].iloc[-1]
-
-if oi_delta > 0:
-    oi_label = "OI_BUILDING"
-elif oi_delta < 0:
-    oi_label = "OI_UNWINDING"
+    if oi_delta > 0:
+        oi_label = "OI_BUILDING"
+    elif oi_delta < 0:
+        oi_label = "OI_UNWINDING"
+    else:
+        oi_label = "OI_INERT"
 else:
     oi_label = "OI_INERT"
 
@@ -300,14 +310,14 @@ with open(JOURNAL_FILE, "rb") as f:
     )
 
 # ==================================================
-# GLOSSARY
+# GLOSSARY (LENGKAP & JELAS)
 # ==================================================
 with st.expander("📘 Daftar Istilah Context Gate", expanded=False):
     st.markdown("""
 ### Kondisi Pasar Saat Ini
 
 **Volume di atas kebiasaan**  
-Aktivitas transaksi lebih ramai dari kondisi normal pair tersebut.
+Aktivitas transaksi lebih ramai dibanding kondisi normal pair tersebut.
 
 **Volume normal**  
 Aktivitas pasar berada pada tingkat wajar.
@@ -331,7 +341,7 @@ Open Interest meningkat → partisipan menambah posisi.
 Open Interest menurun → posisi lama dilepas.
 
 **Minat futures stagnan**  
-Tidak ada perubahan signifikan pada Open Interest.
+Tidak ada konfirmasi perubahan posisi futures.
 
 ---
 
@@ -347,7 +357,7 @@ Volume dan volatilitas naik seimbang → pasar aktif dan responsif.
 OI turun → rawan whipsaw dan fake move.
 
 **Partisipasi rendah**  
-Minat pasar kecil → edge rendah.
+Minat pasar kecil → peluang edge rendah.
 
 **Perilaku campuran**  
 Tidak ada konteks dominan, tunggu kejelasan.
