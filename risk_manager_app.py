@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("📊 Scalping Risk Manager")
-st.caption("Risk-first • Bias Filter • Context-aware • Multi-pair")
+st.caption("Risk-first • Bias Filter • Context-aware • Futures")
 
 # ==================================================
 # SESSION STATE
@@ -36,13 +36,6 @@ if "journal" not in st.session_state:
 # ==================================================
 if os.path.exists(JOURNAL_FILE) and not st.session_state.journal:
     st.session_state.journal = pd.read_csv(JOURNAL_FILE).to_dict("records")
-
-# ==================================================
-# MIGRATION — BACKWARD COMPATIBILITY
-# ==================================================
-for trade in st.session_state.journal:
-    if "time_state" not in trade:
-        trade["time_state"] = "DONE"
 
 # ==================================================
 # SAVE & BACKUP
@@ -100,18 +93,15 @@ mode = st.radio(
 st.divider()
 
 # ==================================================
-# QUICK TRADE MODE
+# QUICK TRADE MODE (EKSEKUSI)
 # ==================================================
 if mode == "📱 Quick Trade (Eksekusi)":
 
-    # refresh tiap 1 menit agar countdown hidup
-    st_autorefresh(interval=60 * 1000, key="timer")
-
-    pin = st.text_input("🔐 PIN Quick Trade", type="password")
+    pin = st.text_input("🔐 PIN Eksekusi", type="password")
     if pin != PIN_CODE:
         st.stop()
 
-    pair = st.text_input("Pair (BTCUSDT, SOLUSDT)").upper()
+    pair = st.text_input("Pair (contoh: BTCUSDT, SOLUSDT)").upper().strip()
     equity = st.number_input("Equity (USD)", value=2500.0)
     risk_percent = st.number_input("Risk per Trade (%)", value=1.0)
     entry = st.number_input("Entry Price", format="%.4f")
@@ -119,48 +109,94 @@ if mode == "📱 Quick Trade (Eksekusi)":
     leverage = st.number_input("Leverage (x)", min_value=1, value=5)
 
     # ==================================================
-    # BIAS CHECKLIST (WITH COLLAPSED EXPANDERS)
+    # BIAS CHECKLIST (EXPLANATORY)
     # ==================================================
-    st.markdown("### 🧠 Bias Checklist")
+    st.markdown("### 🧠 Bias Checklist (TF ±15M)")
 
-    c1 = st.checkbox("EMA searah")
+    c1 = st.checkbox("EMA searah (struktur rapi)")
     with st.expander("Penjelasan EMA searah", expanded=False):
-        st.markdown("- EMA 21/55/89/144 rapi dan searah")
+        st.markdown("""
+- EMA 21 / 55 / 89 / 144 berurutan rapi
+- Tidak saling silang
+- Sudut EMA jelas
+- EMA kusut = **CHOPPY = NO TRADE**
+""")
 
-    c2 = st.checkbox("Harga dijaga EMA")
+    c2 = st.checkbox("Harga dijaga di satu sisi EMA")
     with st.expander("Penjelasan harga vs EMA", expanded=False):
-        st.markdown("- Harga konsisten di satu sisi EMA utama")
+        st.markdown("""
+- Harga dijaga di atas EMA 21 & 55 (bullish)
+- Atau di bawah EMA 21 & 55 (bearish)
+- Pullback → mantul
+- Bolak-balik EMA = arah tidak dijaga
+""")
 
-    c3 = st.checkbox("Momentum ada")
-    with st.expander("Penjelasan momentum", expanded=False):
-        st.markdown("- RSI tidak flat, tenaga masih ada")
+    c3 = st.checkbox("Momentum ada (RSI tidak flat)")
+    with st.expander("Penjelasan momentum RSI", expanded=False):
+        st.markdown("""
+- RSI dominan:
+  - ≥ 55 → bullish
+  - ≤ 45 → bearish
+- RSI 45–55 bolak-balik = **tenaga habis**
+""")
 
     c4 = st.checkbox("Market tidak choppy")
-    with st.expander("Penjelasan choppy", expanded=False):
-        st.markdown("- Tidak whipsaw / doji beruntun")
+    with st.expander("Penjelasan market choppy", expanded=False):
+        st.markdown("""
+- Banyak doji
+- Sumbu panjang
+- Arah cepat berubah
+- **Ragu = anggap choppy**
+""")
 
     bias_score = sum([c1, c2, c3, c4])
     if bias_score < 3:
-        st.error("❌ NO TRADE — Bias belum cukup.")
+        st.error("❌ NO TRADE — Bias belum cukup kuat.")
         st.stop()
 
     # ==================================================
-    # ENTRY
+    # HITUNG RISK
     # ==================================================
-    if st.button("⚡ HITUNG & CATAT TRADE", use_container_width=True):
+    if entry == sl:
+        st.error("Entry dan Stop Loss tidak boleh sama.")
+        st.stop()
 
-        trade_time = datetime.now().isoformat()
-        context = get_latest_context(pair, trade_time)
+    risk_usd = equity * (risk_percent / 100)
+    sl_dist = abs(entry - sl)
+    position_size = (risk_usd * entry) / sl_dist
+    margin = position_size / leverage
+    direction = "LONG" if entry > sl else "SHORT"
 
-        if context is not None:
-            st.info(f"Context terakhir: {context['verdict']}")
+    # ==================================================
+    # OUTPUT ENTRY (WAJIB)
+    # ==================================================
+    st.subheader("📌 Ringkasan Trade (Sebelum Dicatat)")
 
-        risk_usd = equity * (risk_percent / 100)
-        sl_dist = abs(entry - sl)
-        position_size = (risk_usd * entry) / sl_dist
-        margin = position_size / leverage
-        direction = "LONG" if entry > sl else "SHORT"
+    st.markdown(f"""
+**Pair** : {pair}  
+**Arah** : **{direction}**  
 
+**1R** : ${risk_usd:,.2f}  
+**Position Size (Notional)** : ${position_size:,.2f}  
+**Margin Digunakan** : **${margin:,.2f}**
+""")
+
+    # ==================================================
+    # CONTEXT WARNING
+    # ==================================================
+    trade_time = datetime.now().isoformat()
+    context = get_latest_context(pair, trade_time)
+
+    if context is not None:
+        if context["verdict"].startswith("⛔"):
+            st.warning("⚠️ Context terakhir: **TIDAK LAYAK DITRADE**")
+        elif context["verdict"].startswith("⚠️"):
+            st.info("ℹ️ Context terakhir: **AMATI SAJA**")
+
+    # ==================================================
+    # CATAT TRADE
+    # ==================================================
+    if st.button("💾 CATAT TRADE", use_container_width=True):
         st.session_state.journal.append({
             "timestamp": trade_time,
             "pair": pair,
@@ -172,10 +208,12 @@ if mode == "📱 Quick Trade (Eksekusi)":
             "position_size": position_size,
             "margin": margin,
 
-            "time_eval_min": 30,
-            "time_state": "ACTIVE",   # ACTIVE | MATURE | DONE
-
             "context_verdict": context["verdict"] if context is not None else None,
+            "context_behavior": context["behavior"] if context is not None else None,
+            "context_gap_min": round(context["delta_min"], 1) if context is not None else None,
+
+            "time_eval_min": 30,
+            "trade_status": "OPEN",
 
             "result_r": None,
             "exit_reason": None
@@ -183,67 +221,67 @@ if mode == "📱 Quick Trade (Eksekusi)":
 
         save_journal()
         backup_journal()
-        st.success("Trade dicatat.")
+        st.success("Trade berhasil dicatat.")
 
-    # ==================================================
-    # ACTIVE & MATURE TRADES PANEL
-    # ==================================================
-    st.divider()
-    st.subheader("🟢 Trade Aktif")
+# ==================================================
+# NORMAL MODE (MONITORING & EVALUASI)
+# ==================================================
+else:
+    st_autorefresh(interval=60 * 1000, key="monitor_timer")
+
+    st.subheader("🟢 Trade Aktif (maks. 5)")
 
     open_trades = [
         (i, t) for i, t in enumerate(st.session_state.journal)
-        if t["time_state"] in ["ACTIVE", "MATURE"]
-    ]
+        if t["trade_status"] == "OPEN"
+    ][:5]
 
-    active_count = sum(1 for _, t in open_trades if t["time_state"] == "ACTIVE")
-    if active_count > 5:
-        st.warning("⚠️ Lebih dari 5 trade ACTIVE. Fokus bisa menurun.")
+    if not open_trades:
+        st.info("Tidak ada trade aktif.")
+    else:
+        for idx, trade in open_trades:
+            elapsed = int(
+                (datetime.now() - datetime.fromisoformat(trade["timestamp"]))
+                .total_seconds() / 60
+            )
 
-    for idx, trade in open_trades:
-        elapsed = int(
-            (datetime.now() - datetime.fromisoformat(trade["timestamp"]))
-            .total_seconds() / 60
-        )
-
-        # AUTO TRANSITION ACTIVE → MATURE
-        if trade["time_state"] == "ACTIVE" and elapsed >= trade["time_eval_min"]:
-            trade["time_state"] = "MATURE"
-            save_journal()
-
-        label = f"{trade['pair']} • {trade['direction']} • {elapsed} menit • {trade['time_state']}"
-        with st.expander(label, expanded=(trade["time_state"] == "ACTIVE")):
-
-            st.markdown(f"""
-**Entry**: {trade['entry']}  
-**SL**: {trade['sl']}  
-**Context**: {trade['context_verdict']}
+            with st.expander(
+                f"{trade['pair']} • {trade['direction']} • {elapsed} menit",
+                expanded=True
+            ):
+                st.markdown(f"""
+**Entry** : {trade['entry']}  
+**SL** : {trade['sl']}  
+**Margin** : ${trade['margin']:,.2f}  
+**Context** : {trade['context_verdict']}  
+**Berjalan** : {elapsed} menit
 """)
 
-            if trade["time_state"] == "MATURE":
-                st.warning("⏳ Trade sudah melewati waktu evaluasi awal.")
+                if elapsed >= trade["time_eval_min"]:
+                    st.warning("⏳ Waktu evaluasi tercapai")
 
-            if st.button("⛔ Selesai Trade", key=f"done_{idx}"):
-                trade["time_state"] = "DONE"
-                save_journal()
-                backup_journal()
-                st.success("Trade ditandai selesai.")
+                if st.button("⛔ Selesai Trade", key=f"close_{idx}"):
+                    trade["trade_status"] = "CLOSED"
+                    trade["exit_reason"] = "MANUAL_CLOSE"
+                    save_journal()
+                    backup_journal()
+                    st.success("Trade ditandai selesai.")
 
     # ==================================================
-    # UPDATE RESULT R (QUICK MODE)
+    # UPDATE RESULT R
     # ==================================================
     st.divider()
-    st.subheader("✏️ Update Hasil Trade (Quick)")
+    st.subheader("✏️ Update Hasil Trade")
 
-    pending = [
+    pending_eval = [
         i for i, t in enumerate(st.session_state.journal)
-        if t["time_state"] == "DONE" and t["result_r"] is None
+        if t["trade_status"] == "CLOSED" and t["result_r"] is None
     ]
 
-    if pending:
+    if pending_eval:
         idx = st.selectbox(
             "Pilih Trade",
-            pending,
+            pending_eval,
             format_func=lambda i: f"{st.session_state.journal[i]['pair']} @ {st.session_state.journal[i]['timestamp']}"
         )
         r_val = st.selectbox("Result R", R_OPTIONS)
@@ -256,42 +294,15 @@ if mode == "📱 Quick Trade (Eksekusi)":
             backup_journal()
             st.success("Result disimpan.")
     else:
-        st.info("Tidak ada trade menunggu evaluasi.")
+        st.info("Tidak ada trade yang menunggu evaluasi.")
 
-# ==================================================
-# NORMAL MODE
-# ==================================================
-else:
-    if not st.session_state.journal:
-        st.info("Belum ada trade.")
-        st.stop()
-
+    # ==================================================
+    # JOURNAL & EXPORT
+    # ==================================================
+    st.divider()
     df = pd.DataFrame(st.session_state.journal)
     st.dataframe(df, use_container_width=True)
 
-    st.divider()
-    st.subheader("✏️ Update Result R (Normal Mode)")
-
-    open_eval = df[df["result_r"].isna()].index.tolist()
-    if open_eval:
-        idx = st.selectbox(
-            "Pilih Trade",
-            open_eval,
-            format_func=lambda i: f"{df.loc[i,'pair']} @ {df.loc[i,'timestamp']}"
-        )
-        r_val = st.selectbox("Result R", R_OPTIONS)
-        reason = st.text_input("Alasan Exit")
-
-        if st.button("💾 Update Trade"):
-            st.session_state.journal[idx]["result_r"] = r_val
-            st.session_state.journal[idx]["exit_reason"] = reason
-            save_journal()
-            backup_journal()
-            st.success("Trade diperbarui.")
-    else:
-        st.success("Semua trade sudah dievaluasi.")
-
-    st.divider()
     st.download_button(
         "⬇️ Download Journal CSV",
         df.to_csv(index=False).encode("utf-8"),
