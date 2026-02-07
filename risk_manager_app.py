@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("📊 Scalping Risk Manager")
-st.caption("Risk-first • Bias Filter • Context-aware • Futures")
+st.caption("Risk-first • Bias-first • Futures")
 
 # ==================================================
 # SESSION STATE
@@ -51,28 +51,23 @@ def backup_journal():
         pd.DataFrame(st.session_state.journal).to_csv(path, index=False)
 
 # ==================================================
-# CONTEXT LINKING
+# CONTEXT LINK (OPTIONAL WARNING)
 # ==================================================
 def get_latest_context(pair, trade_time, max_minutes=30):
     if not os.path.exists(CONTEXT_JOURNAL_FILE):
         return None
-
     df = pd.read_csv(CONTEXT_JOURNAL_FILE)
     if df.empty:
         return None
-
     df["datetime_wib"] = pd.to_datetime(df["datetime_wib"])
     trade_time = pd.to_datetime(trade_time)
-
     df = df[(df["pair"] == pair) & (df["datetime_wib"] <= trade_time)]
     if df.empty:
         return None
-
     df["delta_min"] = (trade_time - df["datetime_wib"]).dt.total_seconds() / 60
     df = df[df["delta_min"] <= max_minutes]
     if df.empty:
         return None
-
     return df.sort_values("delta_min").iloc[0]
 
 # ==================================================
@@ -93,25 +88,26 @@ mode = st.radio(
 st.divider()
 
 # ==================================================
-# QUICK TRADE MODE (EKSEKUSI)
+# QUICK TRADE MODE (REORDERED FLOW)
 # ==================================================
 if mode == "📱 Quick Trade (Eksekusi)":
 
+    # ---------- STEP 0: PIN ----------
     pin = st.text_input("🔐 PIN Eksekusi", type="password")
     if pin != PIN_CODE:
         st.stop()
 
-    pair = st.text_input("Pair (contoh: BTCUSDT, SOLUSDT)").upper().strip()
-    equity = st.number_input("Equity (USD)", value=2500.0)
-    risk_percent = st.number_input("Risk per Trade (%)", value=1.0)
-    entry = st.number_input("Entry Price", format="%.4f")
-    sl = st.number_input("Stop Loss Price", format="%.4f")
-    leverage = st.number_input("Leverage (x)", min_value=1, value=5)
+    # ---------- STEP 1: PAIR ----------
+    pair = st.text_input(
+        "Pair (contoh: BTCUSDT, ETHUSDT)",
+        help="Pair hanya konteks. Belum ada komitmen risiko."
+    ).upper().strip()
 
-    # ==================================================
-    # BIAS CHECKLIST (EXPLANATORY)
-    # ==================================================
-    st.markdown("### 🧠 Bias Checklist (TF ±15M)")
+    if not pair:
+        st.stop()
+
+    # ---------- STEP 2: BIAS CHECKLIST ----------
+    st.markdown("### 🧠 Validasi Ide (Bias Checklist)")
 
     c1 = st.checkbox("EMA searah (struktur rapi)")
     with st.expander("Penjelasan EMA searah", expanded=False):
@@ -119,7 +115,7 @@ if mode == "📱 Quick Trade (Eksekusi)":
 - EMA 21 / 55 / 89 / 144 berurutan rapi
 - Tidak saling silang
 - Sudut EMA jelas
-- EMA kusut = **CHOPPY = NO TRADE**
+- EMA kusut = CHOPPY = NO TRADE
 """)
 
     c2 = st.checkbox("Harga dijaga di satu sisi EMA")
@@ -137,7 +133,7 @@ if mode == "📱 Quick Trade (Eksekusi)":
 - RSI dominan:
   - ≥ 55 → bullish
   - ≤ 45 → bearish
-- RSI 45–55 bolak-balik = **tenaga habis**
+- RSI 45–55 bolak-balik = tenaga habis
 """)
 
     c4 = st.checkbox("Market tidak choppy")
@@ -146,57 +142,55 @@ if mode == "📱 Quick Trade (Eksekusi)":
 - Banyak doji
 - Sumbu panjang
 - Arah cepat berubah
-- **Ragu = anggap choppy**
+- Ragu = anggap choppy
 """)
 
     bias_score = sum([c1, c2, c3, c4])
+
     if bias_score < 3:
-        st.error("❌ NO TRADE — Bias belum cukup kuat.")
+        st.error("❌ NO TRADE — Ide belum valid.")
         st.stop()
 
-    # ==================================================
-    # HITUNG RISK
-    # ==================================================
+    st.success("✅ Ide valid. Lanjut ke perhitungan risiko.")
+
+    # ---------- STEP 3: RISK INPUT ----------
+    equity = st.number_input("Equity (USD)", value=2500.0)
+    risk_percent = st.number_input("Risk per Trade (%)", value=1.0)
+
+    sl = st.number_input("Stop Loss Price", format="%.4f")
+    entry = st.number_input("Entry Price", format="%.4f")
+    leverage = st.number_input("Leverage (x)", min_value=1, value=5)
+
     if entry == sl:
-        st.error("Entry dan Stop Loss tidak boleh sama.")
+        st.warning("Entry dan SL tidak boleh sama.")
         st.stop()
 
+    # ---------- STEP 4: RISK OUTPUT ----------
     risk_usd = equity * (risk_percent / 100)
     sl_dist = abs(entry - sl)
     position_size = (risk_usd * entry) / sl_dist
     margin = position_size / leverage
     direction = "LONG" if entry > sl else "SHORT"
 
-    # ==================================================
-    # OUTPUT ENTRY (WAJIB)
-    # ==================================================
-    st.subheader("📌 Ringkasan Trade (Sebelum Dicatat)")
-
+    st.subheader("📊 Ringkasan Risiko")
     st.markdown(f"""
 **Pair** : {pair}  
-**Arah** : **{direction}**  
+**Arah** : **{direction}**
 
 **1R** : ${risk_usd:,.2f}  
-**Position Size (Notional)** : ${position_size:,.2f}  
+**Position Size** : ${position_size:,.2f}  
 **Margin Digunakan** : **${margin:,.2f}**
 """)
 
-    # ==================================================
-    # CONTEXT WARNING
-    # ==================================================
+    # ---------- OPTIONAL CONTEXT WARNING ----------
     trade_time = datetime.now().isoformat()
     context = get_latest_context(pair, trade_time)
 
-    if context is not None:
-        if context["verdict"].startswith("⛔"):
-            st.warning("⚠️ Context terakhir: **TIDAK LAYAK DITRADE**")
-        elif context["verdict"].startswith("⚠️"):
-            st.info("ℹ️ Context terakhir: **AMATI SAJA**")
+    if context is not None and context["verdict"].startswith("⛔"):
+        st.warning("⚠️ Context Gate terakhir menyarankan NO TRADE.")
 
-    # ==================================================
-    # CATAT TRADE
-    # ==================================================
-    if st.button("💾 CATAT TRADE", use_container_width=True):
+    # ---------- STEP 5: SAVE TRADE ----------
+    if st.button("💾 Catat Trade & Eksekusi", use_container_width=True):
         st.session_state.journal.append({
             "timestamp": trade_time,
             "pair": pair,
@@ -207,34 +201,26 @@ if mode == "📱 Quick Trade (Eksekusi)":
             "bias_score": bias_score,
             "position_size": position_size,
             "margin": margin,
-
-            "context_verdict": context["verdict"] if context is not None else None,
-            "context_behavior": context["behavior"] if context is not None else None,
-            "context_gap_min": round(context["delta_min"], 1) if context is not None else None,
-
-            "time_eval_min": 30,
             "trade_status": "OPEN",
-
             "result_r": None,
             "exit_reason": None
         })
-
         save_journal()
         backup_journal()
-        st.success("Trade berhasil dicatat.")
+        st.success("Trade dicatat. Lanjut eksekusi di exchange.")
 
 # ==================================================
-# NORMAL MODE (MONITORING & EVALUASI)
+# NORMAL MODE (UNCHANGED)
 # ==================================================
 else:
     st_autorefresh(interval=60 * 1000, key="monitor_timer")
 
-    st.subheader("🟢 Trade Aktif (maks. 5)")
+    st.subheader("🟢 Trade Aktif")
 
     open_trades = [
         (i, t) for i, t in enumerate(st.session_state.journal)
         if t["trade_status"] == "OPEN"
-    ][:5]
+    ]
 
     if not open_trades:
         st.info("Tidak ada trade aktif.")
@@ -252,36 +238,27 @@ else:
                 st.markdown(f"""
 **Entry** : {trade['entry']}  
 **SL** : {trade['sl']}  
-**Margin** : ${trade['margin']:,.2f}  
-**Context** : {trade['context_verdict']}  
-**Berjalan** : {elapsed} menit
+**Margin** : ${trade['margin']:,.2f}
 """)
-
-                if elapsed >= trade["time_eval_min"]:
-                    st.warning("⏳ Waktu evaluasi tercapai")
 
                 if st.button("⛔ Selesai Trade", key=f"close_{idx}"):
                     trade["trade_status"] = "CLOSED"
-                    trade["exit_reason"] = "MANUAL_CLOSE"
                     save_journal()
                     backup_journal()
                     st.success("Trade ditandai selesai.")
 
-    # ==================================================
-    # UPDATE RESULT R
-    # ==================================================
     st.divider()
-    st.subheader("✏️ Update Hasil Trade")
+    st.subheader("✏️ Update Result R")
 
-    pending_eval = [
+    pending = [
         i for i, t in enumerate(st.session_state.journal)
         if t["trade_status"] == "CLOSED" and t["result_r"] is None
     ]
 
-    if pending_eval:
+    if pending:
         idx = st.selectbox(
             "Pilih Trade",
-            pending_eval,
+            pending,
             format_func=lambda i: f"{st.session_state.journal[i]['pair']} @ {st.session_state.journal[i]['timestamp']}"
         )
         r_val = st.selectbox("Result R", R_OPTIONS)
@@ -293,19 +270,7 @@ else:
             save_journal()
             backup_journal()
             st.success("Result disimpan.")
-    else:
-        st.info("Tidak ada trade yang menunggu evaluasi.")
 
-    # ==================================================
-    # JOURNAL & EXPORT
-    # ==================================================
     st.divider()
     df = pd.DataFrame(st.session_state.journal)
     st.dataframe(df, use_container_width=True)
-
-    st.download_button(
-        "⬇️ Download Journal CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        "journal.csv",
-        "text/csv"
-    )
