@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime, timedelta, date
 import os
 from streamlit_autorefresh import st_autorefresh
 
@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("📊 Scalping Risk Manager")
-st.caption("Risk-first • Bias-first • Futures")
+st.caption("Risk-first • Bias-first • Context-aware • Futures")
 
 # ==================================================
 # SESSION STATE
@@ -51,24 +51,62 @@ def backup_journal():
         pd.DataFrame(st.session_state.journal).to_csv(path, index=False)
 
 # ==================================================
-# CONTEXT LINK (OPTIONAL WARNING)
+# CONTEXT GATE INTEGRATION (TIMEZONE SAFE)
 # ==================================================
-def get_latest_context(pair, trade_time, max_minutes=30):
+def get_context_gate_pairs(max_hours=4, limit=5):
+    """
+    Ambil pair TAKEN dari Context Gate
+    - Timezone: WIB
+    - Filter waktu: max_hours terakhir
+    - Anti regresi schema
+    """
     if not os.path.exists(CONTEXT_JOURNAL_FILE):
-        return None
+        return []
+
     df = pd.read_csv(CONTEXT_JOURNAL_FILE)
+
+    REQUIRED_COLS = {"pair", "decision", "datetime_wib"}
+    if not REQUIRED_COLS.issubset(df.columns):
+        st.warning("⚠️ Schema Context Gate tidak cocok.")
+        return []
+
+    df = df[df["decision"] == "TAKEN"]
     if df.empty:
-        return None
-    df["datetime_wib"] = pd.to_datetime(df["datetime_wib"])
-    trade_time = pd.to_datetime(trade_time)
-    df = df[(df["pair"] == pair) & (df["datetime_wib"] <= trade_time)]
+        return []
+
+    # Parse datetime_wib secara eksplisit
+    df["datetime_wib"] = pd.to_datetime(
+        df["datetime_wib"],
+        format="%Y-%m-%d %H:%M",
+        errors="coerce"
+    )
+
+    df = df.dropna(subset=["datetime_wib"])
     if df.empty:
-        return None
-    df["delta_min"] = (trade_time - df["datetime_wib"]).dt.total_seconds() / 60
-    df = df[df["delta_min"] <= max_minutes]
+        return []
+
+    # Gunakan WIB (UTC+7) secara konsisten
+    now_wib = datetime.utcnow() + timedelta(hours=7)
+
+    df["age_hours"] = (
+        now_wib - df["datetime_wib"]
+    ).dt.total_seconds() / 3600
+
+    df = df[df["age_hours"] <= max_hours]
     if df.empty:
-        return None
-    return df.sort_values("delta_min").iloc[0]
+        return []
+
+    # Urutkan terbaru & ambil pair unik
+    df = df.sort_values("datetime_wib", ascending=False)
+
+    pairs = []
+    for p in df["pair"]:
+        if p not in pairs:
+            pairs.append(p)
+        if len(pairs) >= limit:
+            break
+
+    return pairs
 
 # ==================================================
 # CONSTANTS
@@ -88,7 +126,7 @@ mode = st.radio(
 st.divider()
 
 # ==================================================
-# QUICK TRADE MODE (REORDERED FLOW)
+# QUICK TRADE MODE
 # ==================================================
 if mode == "📱 Quick Trade (Eksekusi)":
 
@@ -97,11 +135,29 @@ if mode == "📱 Quick Trade (Eksekusi)":
     if pin != PIN_CODE:
         st.stop()
 
-    # ---------- STEP 1: PAIR ----------
-    pair = st.text_input(
-        "Pair (contoh: BTCUSDT, ETHUSDT)",
-        help="Pair hanya konteks. Belum ada komitmen risiko."
-    ).upper().strip()
+    # ---------- STEP 1: PAIR SELECTION ----------
+    st.markdown("### 🧩 Pilih Pair")
+
+    context_pairs = get_context_gate_pairs(max_hours=4, limit=5)
+
+    use_context = False
+
+    if context_pairs:
+        pair = st.selectbox(
+            "Pair dari Context Gate (TAKEN • ≤ 4 jam)",
+            context_pairs
+        )
+        st.caption("Pair ini lolos Context Gate. Tetap wajib lolos Bias Checklist.")
+        use_context = True
+
+        if st.checkbox("Input pair manual"):
+            pair = st.text_input("Pair (manual)", "").upper().strip()
+            use_context = False
+    else:
+        pair = st.text_input(
+            "Pair (manual)",
+            help="Tidak ada pair TAKEN dari Context Gate dalam 4 jam terakhir."
+        ).upper().strip()
 
     if not pair:
         st.stop()
@@ -146,7 +202,6 @@ if mode == "📱 Quick Trade (Eksekusi)":
 """)
 
     bias_score = sum([c1, c2, c3, c4])
-
     if bias_score < 3:
         st.error("❌ NO TRADE — Ide belum valid.")
         st.stop()
@@ -175,6 +230,7 @@ if mode == "📱 Quick Trade (Eksekusi)":
     st.subheader("📊 Ringkasan Risiko")
     st.markdown(f"""
 **Pair** : {pair}  
+**Sumber Pair** : {"Context Gate" if use_context else "Manual"}  
 **Arah** : **{direction}**
 
 **1R** : ${risk_usd:,.2f}  
@@ -182,18 +238,12 @@ if mode == "📱 Quick Trade (Eksekusi)":
 **Margin Digunakan** : **${margin:,.2f}**
 """)
 
-    # ---------- OPTIONAL CONTEXT WARNING ----------
-    trade_time = datetime.now().isoformat()
-    context = get_latest_context(pair, trade_time)
-
-    if context is not None and context["verdict"].startswith("⛔"):
-        st.warning("⚠️ Context Gate terakhir menyarankan NO TRADE.")
-
     # ---------- STEP 5: SAVE TRADE ----------
     if st.button("💾 Catat Trade & Eksekusi", use_container_width=True):
         st.session_state.journal.append({
-            "timestamp": trade_time,
+            "timestamp": datetime.utcnow().isoformat(),
             "pair": pair,
+            "pair_source": "CONTEXT_GATE" if use_context else "MANUAL",
             "direction": direction,
             "entry": entry,
             "sl": sl,
@@ -227,7 +277,7 @@ else:
     else:
         for idx, trade in open_trades:
             elapsed = int(
-                (datetime.now() - datetime.fromisoformat(trade["timestamp"]))
+                (datetime.utcnow() - datetime.fromisoformat(trade["timestamp"]))
                 .total_seconds() / 60
             )
 
